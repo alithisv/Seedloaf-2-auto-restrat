@@ -1,0 +1,69 @@
+name: Seedloaf Auto Start
+
+on:
+  schedule:
+    # 每天 UTC 00:00 和 12:00 运行（北京时间每天 08:00 和 20:00）
+    - cron: '0 0,12 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-and-start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install sing-box (if PROXY_URI is set)
+        env:
+          PROXY_URI: ${{ secrets.PROXY_URI }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$PROXY_URI" ]; then
+            echo "PROXY_URI 未配置，跳过 sing-box 安装"
+            exit 0
+          fi
+          URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/SagerNet/sing-box/releases/latest \
+            | jq -r '.assets[] | select(.name | test("linux-amd64\\.tar\\.gz$")) | .browser_download_url' | head -n 1)
+          if [ -z "$URL" ]; then
+            echo "获取 sing-box 下载链接失败"
+            exit 1
+          fi
+          mkdir -p /tmp/sb
+          curl -fsSL "$URL" | tar -xz -C /tmp/sb --strip-components=1
+          sudo mv /tmp/sb/sing-box /usr/local/bin/sing-box
+          sudo chmod +x /tmp/sb/sing-box 2>/dev/null || sudo chmod +x /usr/local/bin/sing-box
+          rm -rf /tmp/sb
+          sing-box version
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Run Seedloaf check script
+        env:
+          SEEDLOAF_EMAIL: ${{ secrets.SEEDLOAF_EMAIL }}
+          SEEDLOAF_PASSWORD: ${{ secrets.SEEDLOAF_PASSWORD }}
+          SEEDLOAF_WORLD_ID: ${{ secrets.SEEDLOAF_WORLD_ID }}
+          PROXY_URI: ${{ secrets.PROXY_URI }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: npm start
+
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seedloaf-screenshots
+          path: '*.png'
+          retention-days: 3
+          if-no-files-found: ignore

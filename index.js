@@ -44,6 +44,27 @@ function buildCaption({ title, statusText, exitIp, proxyLabel, detail }) {
   return lines.join("\n");
 }
 
+async function clickLoginSubmit(page) {
+  // 优先匹配表单提交按钮，显式排除 Discord 等第三方登录按钮
+  const formSubmit = page
+    .locator('form button[type="submit"], button[data-localization-key="formButtonPrimary"]')
+    .filter({ hasNotText: /Discord|Google|GitHub/i })
+    .first();
+
+  if (await formSubmit.isVisible().catch(() => false)) {
+    await formSubmit.click();
+    return;
+  }
+
+  const fallbackContinue = page
+    .getByRole("button", { name: /^Continue/i })
+    .filter({ hasNotText: /Discord|Google|GitHub/i })
+    .last();
+
+  await fallbackContinue.waitFor({ state: "visible", timeout: 10000 });
+  await fallbackContinue.click();
+}
+
 async function run() {
   if (!EMAIL || !PASSWORD) {
     console.error("❌ 缺少环境变量：请配置 SEEDLOAF_EMAIL 和 SEEDLOAF_PASSWORD");
@@ -97,32 +118,30 @@ async function run() {
     await page.goto(TARGET_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.waitForTimeout(3000);
 
-    // 4. 自动处理 Clerk 登录
+    // 4. 自动处理 Clerk 邮箱密码登录
     if (page.url().includes("accounts.seedloaf.com") || page.url().includes("sign-in")) {
-      console.log("🔐 检测到登录页面，开始自动登录...");
+      console.log("🔐 检测到登录页面，开始邮箱密码登录...");
 
       const emailInput = page.locator('input[name="identifier"], input[type="email"]').first();
       await emailInput.waitFor({ state: "visible", timeout: 25000 });
       await emailInput.fill(EMAIL);
 
       const passwordInput = page.locator('input[name="password"], input[type="password"]').first();
-      const continueBtn = page.getByRole("button", { name: /Continue/i }).first();
 
       if (await passwordInput.isVisible()) {
         await passwordInput.fill(PASSWORD);
-        await continueBtn.click();
+        await clickLoginSubmit(page);
       } else {
-        await continueBtn.click();
+        await clickLoginSubmit(page);
         await passwordInput.waitFor({ state: "visible", timeout: 20000 });
         await passwordInput.fill(PASSWORD);
-        await continueBtn.click();
+        await clickLoginSubmit(page);
       }
 
       console.log("⏳ 等待登录跳转回面板...");
       await page.waitForURL(/seedloaf\.com\/dashboard/, { timeout: 45000 });
       console.log("✅ 登录成功");
 
-      // 若登录后停在总览页且配置了 WORLD_ID，自动切回指定控制台
       if (WORLD_ID && !page.url().includes(WORLD_ID)) {
         await page.goto(TARGET_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
       }

@@ -45,7 +45,6 @@ function buildCaption({ title, statusText, exitIp, proxyLabel, detail }) {
 }
 
 async function clickLoginSubmit(page) {
-  // 优先匹配表单提交按钮，显式排除 Discord 等第三方登录按钮
   const formSubmit = page
     .locator('form button[type="submit"], button[data-localization-key="formButtonPrimary"]')
     .filter({ hasNotText: /Discord|Google|GitHub/i })
@@ -63,6 +62,48 @@ async function clickLoginSubmit(page) {
 
   await fallbackContinue.waitFor({ state: "visible", timeout: 10000 });
   await fallbackContinue.click();
+}
+
+async function dismissConsentModal(page) {
+  const scopes = [page, ...page.frames()];
+  for (const scope of scopes) {
+    try {
+      const candidates = [
+        scope.locator("button.fc-cta-consent").first(),
+        scope.getByRole("button", { name: /^Consent$/i }).first(),
+        scope.locator("button.fc-cta-do-not-consent").first(),
+        scope.getByRole("button", { name: /^Do not consent$/i }).first(),
+        scope.getByRole("button", { name: /^(Accept all|Agree|I agree)$/i }).first(),
+      ];
+
+      for (const btn of candidates) {
+        if (await btn.isVisible().catch(() => false)) {
+          console.log("🍪 检测到隐私同意弹窗，正在自动关闭...");
+          await btn.click({ timeout: 5000 });
+          await page.waitForTimeout(1500);
+          return true;
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 兜底：若仍残留 Google CMP 遮罩层则直接移除 DOM
+  const removed = await page
+    .evaluate(() => {
+      const root = document.querySelector(".fc-consent-root");
+      if (root) {
+        root.remove();
+        return true;
+      }
+      return false;
+    })
+    .catch(() => false);
+
+  if (removed) {
+    console.log("🍪 已强制清理残留的隐私遮罩层。");
+    await page.waitForTimeout(500);
+  }
+  return removed;
 }
 
 async function run() {
@@ -147,8 +188,9 @@ async function run() {
       }
     }
 
-    // 5. 等待控制台状态同步
+    // 5. 等待控制台状态同步并清理隐私弹窗
     await page.waitForTimeout(6000);
+    await dismissConsentModal(page);
     await page.screenshot({ path: "before-action.png", fullPage: true });
 
     const startBtn = page.getByRole("button", { name: /Start World/i }).first();
@@ -168,6 +210,7 @@ async function run() {
       });
     } else if (await startBtn.isVisible()) {
       console.log("🔴 检测到服务器已停机（OFFLINE），正在点击 Start World...");
+      await dismissConsentModal(page);
       await startBtn.click();
 
       await page.waitForTimeout(12000);
